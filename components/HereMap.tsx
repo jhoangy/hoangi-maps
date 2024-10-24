@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { getRoute } from '../utils/hereRouting';
+import { getRoute, searchLocations } from '../utils/hereRouting';
 
 const HereMap: React.FC = () => {
   const mapRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<H.Map | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [destination, setDestination] = useState<string>('');
+  const [locations, setLocations] = useState<any[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   useEffect(() => {
-    // Get the user's location using the Geolocation API
     const getUserLocation = () => {
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
@@ -17,19 +19,17 @@ const HereMap: React.FC = () => {
           },
           (error) => {
             console.error('Error getting user location', error);
-            // Fallback to a default location (Tokyo)
-            setUserLocation({ lat: 35.6895, lng: 139.6917 }); // Tokyo
+            setUserLocation({ lat: 43.6577, lng: -79.3788 }); // Default to a fixed location
           }
         );
       } else {
         console.error('Geolocation is not supported by this browser.');
-        // Fallback to a default location (Tokyo)
-        setUserLocation({ lat: 35.6895, lng: 139.6917 }); // Tokyo
+        setUserLocation({ lat: 43.6577, lng: -79.3788 }); // Default to a fixed location
       }
     };
 
     const loadHereMaps = () => {
-      const H = (window as any).H; // Use 'any' to avoid TypeScript issues with the HERE namespace
+      const H = (window as any).H;
 
       const platform = new H.service.Platform({
         apikey: process.env.NEXT_PUBLIC_HERE_API_KEY as string,
@@ -38,10 +38,9 @@ const HereMap: React.FC = () => {
       const defaultLayers = platform.createDefaultLayers();
       const mapInstance = new H.Map(mapRef.current!, defaultLayers.vector.normal.map, {
         zoom: 12,
-        center: userLocation || { lat: 35.6895, lng: 139.6917 }, // Center on user's location or default to Tokyo
+        center: userLocation || { lat: 43.6577, lng: -79.3788 },
       });
 
-      // Enable map events
       const behavior = new H.mapevents.Behavior(new H.mapevents.MapEvents(mapInstance));
       H.ui.UI.createDefault(mapInstance, defaultLayers);
 
@@ -66,49 +65,124 @@ const HereMap: React.FC = () => {
           document.body.appendChild(script);
         });
       }
-      loadHereMaps(); // Load the HERE Maps after scripts are loaded
+      loadHereMaps();
     };
 
     loadScripts(scriptUrls);
-    getUserLocation(); // Call to get user's location
+    getUserLocation();
   }, []);
 
   useEffect(() => {
     if (map && userLocation) {
-      map.setCenter(userLocation); // Center the map on user's location
+      map.setCenter(userLocation);
     }
   }, [map, userLocation]);
 
   const displayRoute = async () => {
-    const start = userLocation || { lat: 35.6895, lng: 139.6917 }; // Use user's location or default to Tokyo
-    const end = { lat: 35.682839, lng: 139.759455 }; // Another location in Tokyo
+    if (!userLocation) {
+      console.error('User location not available');
+      return;
+    }
 
-    const route = await getRoute(start, end);
+    const start = userLocation;
+    const end = selectedLocation;
 
-    if (route && map) {
-      const lineString = new H.geo.LineString();
-      route.sections.forEach((section: any) => {
-        section.polyline.forEach((point: string) => {
-          const parts = point.split(',');
-          lineString.pushLatLngAlt(parseFloat(parts[0]), parseFloat(parts[1]));
+    try {
+      const routeData = await getRoute(start, end);
+
+      if (routeData && routeData.routes && routeData.routes.length > 0) {
+        const H = window.H;
+
+        const lineString = new H.geo.LineString();
+
+        routeData.routes[0].sections.forEach((section: any) => {
+          const polyline = H.geo.LineString.fromFlexiblePolyline(section.polyline);
+          const latLngArray = polyline.getLatLngAltArray();
+          for (let i = 0; i < latLngArray.length; i += 3) {
+            const lat = latLngArray[i];
+            const lng = latLngArray[i + 1];
+            lineString.pushLatLngAlt(lat, lng, 0);
+          }
         });
-      });
 
-      const routeLine = new H.map.Polyline(lineString, {
-        style: { strokeColor: '#0000FF', lineWidth: 4 },
-      });
+        const routeLine = new H.map.Polyline(lineString, {
+          style: { strokeColor: 'blue', lineWidth: 4 },
+        });
 
-      map.addObject(routeLine);
-      map.getViewModel().setLookAtData({ bounds: routeLine.getBoundingBox() });
+        map.addObject(routeLine);
+        map.getViewModel().setLookAtData({ bounds: routeLine.getBoundingBox() });
+      } else {
+        console.error("Couldn't find the route.");
+      }
+    } catch (error) {
+      console.error('Error displaying route:', error);
     }
   };
 
+  const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value;
+    setDestination(query);
+
+    if (query.length > 2) {
+      try {
+        const results = await searchLocations(query); // Use searchLocations instead of searchFoursquarePlaces
+        setLocations(results);
+      } catch (error) {
+        console.error('Error searching locations:', error);
+      }
+    } else {
+      setLocations([]); // Clear results if query is too short
+    }
+  };
+
+  const handleSelectLocation = (location: any) => {
+    // Access the coordinates correctly
+    const lat = location.geocodes?.main?.latitude || location.location?.lat;
+    const lng = location.geocodes?.main?.longitude || location.location?.lng;
+  
+    if (lat !== undefined && lng !== undefined) {
+      setSelectedLocation({ lat, lng });
+      setDestination(location.name); // Set the destination input to the selected location
+      setLocations([]); // Clear search results
+    } else {
+      console.error('Coordinates not found for the selected location.');
+    }
+  };
+  
+
   return (
     <div>
+      <input
+        type="text"
+        placeholder="Enter your destination"
+        value={destination}
+        onChange={handleSearch}
+        style={{ width: '300px', marginBottom: '10px' }}
+      />
+      {locations.length > 0 && (
+        <ul>
+          {locations.map((location) => (
+            <li key={location.id} onClick={() => handleSelectLocation(location)}>
+              <strong>{location.name}</strong>
+              <br />
+              {location.location && (
+                <>
+                  {location.location.address && <span>{location.location.address}, </span>}
+                  {location.location.city && <span>{location.location.city}, </span>}
+                  {location.location.state && <span>{location.location.state}, </span>}
+                  {location.location.zip && <span>{location.location.zip} </span>}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <div ref={mapRef} style={{ width: '100%', height: '500px' }} />
       <button onClick={displayRoute}>Get Route</button>
     </div>
   );
+  
+  
 };
 
 export default HereMap;
