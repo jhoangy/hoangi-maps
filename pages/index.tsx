@@ -8,9 +8,9 @@ const Home: React.FC = () => {
   return (
     <div>
       <Head>
-        <title>Better Maps with HERE Routing API</title>
+        <title>Hoangi Maps</title>
       </Head>
-      <h1>Better Maps with HERE Routing</h1>
+      <h1>Hoangi Maps</h1>
       <HereMap />
     </div>
   );

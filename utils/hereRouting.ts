@@ -9,7 +9,7 @@ export const getRoute = async (start: { lat: number; lng: number }, end: { lat: 
   console.log(waypointStart);
   console.log(waypointEnd);
   
-  const url = `https://router.hereapi.com/v8/routes?transportMode=car&origin=${waypointStart}&destination=${waypointEnd}&return=polyline&apiKey=${HERE_API_KEY}`;
+  const url = `https://router.hereapi.com/v8/routes?transportMode=car&origin=${waypointStart}&destination=${waypointEnd}&routingMode=fast&return=polyline&apiKey=${HERE_API_KEY}`;
   
   try {
     const response = await fetch(url);
