@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { getRoute, searchLocations } from '../utils/hereRouting'; // Keep your existing HERE functions
-import { getTomTomRoute } from '../utils/tomtomRouting'; // Import TomTom function
+import { getRoute, searchLocations } from '../utils/hereRouting';
+import { getTomTomRoute } from '../utils/tomtomRouting';
 
 const HereMap: React.FC = () => {
     const mapRef = useRef<HTMLDivElement | null>(null);
@@ -10,6 +10,10 @@ const HereMap: React.FC = () => {
     const [locations, setLocations] = useState<any[]>([]);
     const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
     const [travelTime, setTravelTime] = useState<string>(''); // To hold travel time info
+    const [userMarker, setUserMarker] = useState<H.map.Marker | null>(null); // Marker for user location
+    const [destinationMarker, setDestinationMarker] = useState<H.map.Marker | null>(null); // Marker for destination
+    const [routeLine, setRouteLine] = useState<H.map.Polyline | null>(null); // Line for the current route
+    const [heading, setHeading] = useState<number>(0); // Store heading for the marker
 
     useEffect(() => {
         const getUserLocation = () => {
@@ -76,48 +80,141 @@ const HereMap: React.FC = () => {
 
     useEffect(() => {
         if (map && userLocation) {
-            map.setCenter(userLocation);
+            map.setCenter(userLocation); // Center the map on the user's location
+
+            const H = window.H;
+
+            // Create a simple marker for the user's current location
+            const iconUrl = 'https://www.svgrepo.com/show/24646/black-pointer.svg'; // URL for the marker icon
+            const iconSize = { w: 32, h: 32 }; // Size of the icon
+            const anchor = { x: iconSize.w / 2, y: iconSize.h }; // Anchor point
+
+            // Create or update the marker for the user's current location
+            if (!userMarker) {
+                const marker = new H.map.Marker(userLocation, {
+                    icon: new H.map.Icon(iconUrl, { size: iconSize, anchor }),
+                });
+                map.addObject(marker);
+                setUserMarker(marker); // Store the marker in state
+            } else {
+                // Update the user's marker position
+                userMarker.setGeometry(new H.geo.Point(userLocation.lng, userLocation.lat));
+            }
         }
     }, [map, userLocation]);
 
-    const displayRoute = async () => {
-        if (!userLocation || !selectedLocation) {
-            console.error('User location or selected location not available');
-            return;
-        }
+    // Function to update user location every few seconds
+    useEffect(() => {
+        const intervalId = setInterval(() => {
+            navigator.geolocation.getCurrentPosition((position) => {
+                const { latitude, longitude } = position.coords;
+                setUserLocation({ lat: latitude, lng: longitude });
+            });
+        }, 5000); // Update every 5 seconds
 
-        const start = userLocation;
-        const end = selectedLocation;
+        return () => clearInterval(intervalId); // Clean up on unmount
+    }, []);
 
-        try {
-            const routeData = await getTomTomRoute(start, end); // Use TomTom API for route
-
-            if (routeData && routeData.routes && routeData.routes.length > 0) {
-                const H = window.H;
-                const lineString = new H.geo.LineString();
-
-                routeData.routes[0].legs[0].points.forEach((point: any) => {
-                    lineString.pushLatLngAlt(point.latitude, point.longitude, 0);
-                });
-
-                const routeLine = new H.map.Polyline(lineString, {
-                    style: { strokeColor: 'blue', lineWidth: 4 },
-                });
-
-                map.addObject(routeLine);
-                map.getViewModel().setLookAtData({ bounds: routeLine.getBoundingBox() });
-
-                // Get estimated time of arrival
-                const duration = routeData.routes[0].summary.travelTime; // Duration in seconds
-                const travelTimeFormatted = `${Math.floor(duration / 60)} minutes`; // Convert to minutes
-                setTravelTime(travelTimeFormatted);
-            } else {
-                console.error("Couldn't find the route.");
+    // Get heading using device orientation
+    useEffect(() => {
+        const handleOrientation = (event: DeviceOrientationEvent) => {
+            if (event.alpha !== null) {
+                setHeading(event.alpha); // Set the heading (in degrees)
             }
-        } catch (error) {
-            console.error('Error displaying route:', error);
-        }
-    };
+        };
+
+        const requestPermission = async () => {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    await DeviceOrientationEvent.requestPermission();
+                } catch (error) {
+                    console.error('Permission denied', error);
+                }
+            }
+        };
+
+        requestPermission();
+
+        window.addEventListener('deviceorientation', handleOrientation);
+
+        return () => {
+            window.removeEventListener('deviceorientation', handleOrientation);
+        };
+    }, []);
+    
+    const handleSelectLocation = async (location: any) => {
+      const lat = location.geocodes?.main?.latitude || location.location?.lat;
+      const lng = location.geocodes?.main?.longitude || location.location?.lng;
+  
+      if (lat !== undefined && lng !== undefined) {
+          setSelectedLocation({ lat, lng });
+          setDestination(location.name);
+          setLocations([]); // Clear search results
+  
+          // Call displayRoute to show the route to the selected location
+          await displayRoute(); // Ensure route is displayed after selection
+      } else {
+          console.error('Coordinates not found for the selected location.');
+      }
+  };
+  
+    // Update displayRoute to manage the destination marker correctly
+    const displayRoute = async () => {
+      if (!userLocation || !selectedLocation) {
+          console.error('User location or selected location not available');
+          return;
+      }
+  
+      const start = userLocation;
+      const end = selectedLocation;
+  
+      try {
+          const routeData = await getTomTomRoute(start, end); // Use TomTom API for route
+  
+          if (routeData && routeData.routes && routeData.routes.length > 0) {
+              const H = window.H;
+  
+              // Clear previous route if it exists
+              if (routeLine) {
+                  map.removeObject(routeLine);
+              }
+  
+              const lineString = new H.geo.LineString();
+  
+              routeData.routes[0].legs[0].points.forEach((point: any) => {
+                  lineString.pushLatLngAlt(point.latitude, point.longitude, 0);
+              });
+  
+              const newRouteLine = new H.map.Polyline(lineString, {
+                  style: { strokeColor: 'blue', lineWidth: 4 },
+              });
+  
+              map.addObject(newRouteLine);
+              setRouteLine(newRouteLine); // Store the new route line in state
+              map.getViewModel().setLookAtData({ bounds: newRouteLine.getBoundingBox() });
+  
+              // Get estimated time of arrival
+              const duration = routeData.routes[0].summary.travelTime; // Duration in seconds
+              const travelTimeFormatted = `${Math.floor(duration / 60)} minutes`; // Convert to minutes
+              setTravelTime(travelTimeFormatted);
+  
+              // Remove previous destination marker if it exists
+              if (destinationMarker) {
+                  map.removeObject(destinationMarker); // Remove the existing marker from the map
+              }
+  
+              // Add marker for the selected location
+              const marker = new H.map.Marker(selectedLocation);
+              map.addObject(marker);
+              setDestinationMarker(marker); // Store the marker in state
+          } else {
+              console.error("Couldn't find the route.");
+          }
+      } catch (error) {
+          console.error('Error displaying route:', error);
+      }
+  };
+  
 
     const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const query = e.target.value;
@@ -125,26 +222,13 @@ const HereMap: React.FC = () => {
 
         if (query.length > 2) {
             try {
-                const results = await searchLocations(query); // Use searchLocations instead of searchFoursquarePlaces
+                const results = await searchLocations(query);
                 setLocations(results);
             } catch (error) {
                 console.error('Error searching locations:', error);
             }
         } else {
             setLocations([]); // Clear results if query is too short
-        }
-    };
-
-    const handleSelectLocation = (location: any) => {
-        const lat = location.geocodes?.main?.latitude || location.location?.lat;
-        const lng = location.geocodes?.main?.longitude || location.location?.lng;
-
-        if (lat !== undefined && lng !== undefined) {
-            setSelectedLocation({ lat, lng });
-            setDestination(location.name); // Set the destination input to the selected location
-            setLocations([]); // Clear search results
-        } else {
-            console.error('Coordinates not found for the selected location.');
         }
     };
 
@@ -159,25 +243,21 @@ const HereMap: React.FC = () => {
             />
             {locations.length > 0 && (
                 <ul>
-                    {locations.map((location) => (
-                        <li key={location.id} onClick={() => handleSelectLocation(location)}>
-                            <strong>{location.name}</strong>
-                            <br />
-                            {location.location && (
+                    {locations.map((location, index) => (
+                        <li key={index} onClick={() => handleSelectLocation(location)}>
+                            {location.name} {location.location && (
                                 <>
-                                    {location.location.address && <span>{location.location.address}, </span>}
-                                    {location.location.city && <span>{location.location.city}, </span>}
-                                    {location.location.state && <span>{location.location.state}, </span>}
-                                    {location.location.zip && <span>{location.location.zip} </span>}
+                                    <span>({location.location.lat}, {location.location.lng})</span>
+                                    {location.location.zip && <span> - {location.location.zip}</span>}
                                 </>
                             )}
                         </li>
                     ))}
                 </ul>
             )}
-            <div ref={mapRef} style={{ width: '100%', height: '500px' }} />
             <button onClick={displayRoute}>Get Route</button>
-            {travelTime && <div>Estimated Travel Time: {travelTime}</div>} {/* Show estimated travel time */}
+            <div ref={mapRef} style={{ width: '100%', height: '400px' }}></div>
+            {travelTime && <div>Estimated Travel Time: {travelTime}</div>}
         </div>
     );
 };
